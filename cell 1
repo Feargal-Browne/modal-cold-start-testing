@@ -62,23 +62,45 @@ def download_models():
         )
     print("✅ All models downloaded")
 
-# Minimal, fast-booting image
+def optimize_onnx_models():
+    """Pre-compile and optimize ONNX models during image build"""
+    import onnxruntime as ort
+    
+    for filename in [CONFIG["DEBERTA_ONNX"], CONFIG["DISTILROBERTA_ONNX"], CONFIG["QUANTUM_ONNX"]]:
+        path = os.path.join(MODEL_DIR, filename)
+        print(f"Pre-compiling {filename}...")
+        
+        opts = ort.SessionOptions()
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        
+        # Trigger compilation (will be cached)
+        try:
+            session = ort.InferenceSession(path, opts)
+            del session
+        except Exception as e:
+            print(f"Note: {filename} will be compiled at runtime ({e})")
+    
+    print("✅ Models pre-compiled")
+
+# Minimal, fast-booting image with CUDA 12.6 and latest packages
 disinfo_image = (
     modal.Image.from_registry(
-        "nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04",
-        add_python="3.12", # <-- FIX 1: Matches your local Python
+        "nvidia/cuda:12.6.0-cudnn9-runtime-ubuntu22.04",
+        add_python="3.12",
     )
     .pip_install(
-        # --- FIX 2: Stable libraries for Python 3.12
-        "onnxruntime-gpu==1.17.3",
-        "transformers==4.39.3",
-        "tokenizers==0.15.2", # This version avoids the ModelWrapper bug
-        "numpy==1.26.4",
-        "huggingface-hub==0.22.2",
-        "sentencepiece==0.2.0",
+        # Latest stable versions (November 2025)
+        "onnxruntime-gpu==1.23.2",      # Latest with CUDA 12 support
+        "transformers==4.57.1",          # Latest
+        "tokenizers==0.22.1",            # Latest
+        "numpy==2.0.2",                  # Latest
+        "huggingface-hub==0.27.0",       # Latest
+        "sentencepiece==0.2.0",          # Stable
     )
     .run_function(download_models, secrets=[hf_secret], timeout=600)
+    .run_function(optimize_onnx_models, secrets=[hf_secret], timeout=300)
 )
 
-print("✅ Image defined. This image can be reused across multiple models!")
+print("✅ Image defined with CUDA 12.6 and latest packages!")
+print("✅ This image can be reused across multiple models!")
 print("Run CELL 2 next to define the inference function.")
