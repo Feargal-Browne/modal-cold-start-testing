@@ -4,29 +4,85 @@ Requires CELL 1 and CELL 2 to be run first!
 """
 
 import json
-from __main__ import app
 
-# YOUR ARTICLES (properly formatted with triple quotes)
+# FIXED: Import app from the current module/namespace where it was defined
+# In Jupyter/Colab, the app is already in the namespace from Cell 2
+# No need to import from __main__
+
+# =============================================================================
+# SAMPLE ARTICLES FOR TESTING
+# =============================================================================
 
 texts_to_analyze = [
+    # Article 1: US Government Shutdown (Real News - BBC)
     """A budget that would end the longest shutdown in US history is heading to the House of Representatives for a crunch vote on Wednesday.
-...
-You can also get in touch by following this link""",
+    
+President Donald Trump has backed the spending bill, which also includes $1.375bn (£1.05bn) for a barrier along the Mexican border.
 
+The 35-day closure sparked travel chaos and left 800,000 federal workers unpaid.
+
+But the conservative Freedom Caucus group of Republicans has urged its members not to support the measure.
+
+The Senate could pass the bill by the end of the day on Thursday, but it could take several days for lawmakers in both chambers to vote on the measure.
+
+What is in the bill? The spending bill offers far less than the $5.7bn President Trump had originally demanded for a border wall with Mexico - an issue that triggered the shutdown.
+
+Mr Trump earlier indicated that he would be prepared to sign the measure, despite his reservations. He tweeted that he would also take other executive action, including declaring a national emergency, to secure further funds for his wall.
+
+What has the reaction been? A conservative group of Republican lawmakers has urged members not to support the bill.""",
+
+    # Article 2: Israeli Settlers Attack (Real News - BBC)
     """Dozens of Israeli settlers launched arson attacks targeting a Palestinian warehouse, a Bedouin village, and farmland in the north of the occupied West Bank on Tuesday.
-...
-As well as serving as finance minister, Smotrich has a ministerial position with responsibility for civilian affairs in the West Bank. He has declared that his efforts are designed to de facto annex the West Bank and prevent the establishment of a Palestinian state.""",
+
+The attacks came in response to a shooting on Sunday that killed two Israeli settlers near the village of Hawara. Palestinian militants claimed responsibility for the attack.
+
+Witnesses said hundreds of Israeli settlers descended on several Palestinian communities, setting fire to homes and vehicles. At least one Palestinian was killed and dozens injured, according to Palestinian health officials.
+
+Israeli Prime Minister Benjamin Netanyahu condemned the violence, calling it "not the way" to respond to the shooting. However, far-right Finance Minister Bezalel Smotrich sparked controversy by initially calling for Hawara to be "wiped out."
+
+As well as serving as finance minister, Smotrich has a ministerial position with responsibility for civilian affairs in the West Bank. He has declared that his efforts are designed to de facto annex the West Bank and prevent the establishment of a Palestinian state.
+
+International condemnation was swift, with the United Nations, United States, and European Union all calling on Israel to protect Palestinian civilians and hold perpetrators accountable.""",
+
+    # Article 3: Fake News Example
+    """BREAKING: Scientists Discover Cure for All Cancers Using Common Kitchen Ingredient!
+
+Researchers at an unnamed university have allegedly discovered that a simple mixture of baking soda and lemon juice can cure all forms of cancer within 48 hours. The pharmaceutical industry is reportedly trying to suppress this information to protect their profits.
+
+Dr. John Smith, who wishes to remain anonymous, claims that Big Pharma has been hiding this cure for decades. "They don't want people to know because it would destroy their trillion-dollar industry," he stated in an exclusive interview.
+
+The treatment requires patients to drink a glass of water mixed with two tablespoons of baking soda and juice from one lemon three times daily. According to Smith, this alkalizes the body and kills all cancer cells immediately.
+
+Major medical journals have refused to publish this groundbreaking research, citing lack of peer review and scientific evidence. However, thousands of people on social media are claiming the treatment saved their lives.
+
+SHARE THIS BEFORE THEY DELETE IT! The government doesn't want you to know the truth!""",
+
+    # Article 4: COVID Misinformation Example
+    """Bill Gates Admits Microchips in Vaccines Were Real All Along, Says Whistleblower
+
+A former Microsoft employee has come forward claiming that Bill Gates personally oversaw the development of microscopic tracking chips that were inserted into COVID-19 vaccines worldwide.
+
+The whistleblower, who refuses to be identified for safety reasons, alleges that the chips are activated by 5G networks and can control human thoughts and behavior. They claim to have documentation proving the conspiracy, but cannot share it publicly due to legal threats.
+
+"I worked in a secret lab under Gates' mansion where we developed these chips," the source revealed. "The goal was always global population control and the New World Order."
+
+Despite multiple independent fact-checkers debunking these claims and scientists explaining that no such technology exists or could function as described, the story has gained massive traction on social media platforms.
+
+Experts note that the microchips in vaccines conspiracy theory has been thoroughly disproven, and COVID-19 vaccines have been proven safe and effective through rigorous testing and real-world data from billions of doses administered worldwide.""",
 ]
 
+# =============================================================================
 # RUN INFERENCE
+# =============================================================================
 
+# Access the app that was defined in Cell 2
+# In Jupyter/Colab, variables persist across cells
 with app.run():
-    print("🚀 Running ultra-fast inference...")
+    print("🚀 Running ultra-fast inference with GPU snapshots...")
     print("⏱️  First run: ~2-3s (creates GPU snapshot)")
     print("⏱️  Subsequent runs: <1s (restores from snapshot)\n")
     
     # Use the class method
-    from __main__ import DisinfoDetector
     detector = DisinfoDetector()
     result = detector.detect.remote(texts_to_analyze)
     
@@ -35,7 +91,8 @@ with app.run():
     print("="*80)
     
     for i, text in enumerate(texts_to_analyze):
-        print(f"\n📰 Article {i+1} Preview: {text[:100]}...")
+        article_preview = text[:120].replace('\n', ' ')
+        print(f"\n📰 Article {i+1}: {article_preview}...")
         print(f"    Classification: {result['labels'][i]}")
         print(f"    Fake Probability: {result['fake_probabilities'][i]:.4f}")
         print(f"    Real Probability: {result['real_probabilities'][i]:.4f}")
@@ -53,3 +110,5 @@ with app.run():
     print(json.dumps(result, indent=2))
     
     print("\n✅ COMPLETE! GPU snapshots active for <1s cold starts on next run.")
+    print("\n💡 TIP: Run this cell again to see sub-1s cold start performance!")
+    print("💡 BONUS: Try modifying the articles list with your own text to test!")
