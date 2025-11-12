@@ -1,0 +1,55 @@
+"""
+CELL 3: Run inference on your articles
+Requires CELL 1 and CELL 2 to be run first!
+"""
+
+import json
+from __main__ import app
+
+# YOUR ARTICLES (properly formatted with triple quotes)
+
+texts_to_analyze = [
+    """A budget that would end the longest shutdown in US history is heading to the House of Representatives for a crunch vote on Wednesday.
+...
+You can also get in touch by following this link""",
+
+    """Dozens of Israeli settlers launched arson attacks targeting a Palestinian warehouse, a Bedouin village, and farmland in the north of the occupied West Bank on Tuesday.
+...
+As well as serving as finance minister, Smotrich has a ministerial position with responsibility for civilian affairs in the West Bank. He has declared that his efforts are designed to de facto annex the West Bank and prevent the establishment of a Palestinian state.""",
+]
+
+# RUN INFERENCE
+
+with app.run():
+    print("🚀 Running ultra-fast inference...")
+    print("⏱️  First run: ~2-3s (creates GPU snapshot)")
+    print("⏱️  Subsequent runs: <1s (restores from snapshot)\n")
+    
+    # Use the class method
+    from __main__ import DisinfoDetector
+    detector = DisinfoDetector()
+    result = detector.detect.remote(texts_to_analyze)
+    
+    print("\n" + "="*80)
+    print("📊 RESULTS")
+    print("="*80)
+    
+    for i, text in enumerate(texts_to_analyze):
+        print(f"\n📰 Article {i+1} Preview: {text[:100]}...")
+        print(f"    Classification: {result['labels'][i]}")
+        print(f"    Fake Probability: {result['fake_probabilities'][i]:.4f}")
+        print(f"    Real Probability: {result['real_probabilities'][i]:.4f}")
+        print(f"    Confidence: {max(result['fake_probabilities'][i], result['real_probabilities'][i]):.4f}")
+    
+    print("\n" + "="*80)
+    print("⏱️  PERFORMANCE METRICS")
+    print("="*80)
+    print(f"Total Inference Time: {result['timings']['total_ms']:.2f} ms")
+    print(f"Per Article: {result['timings']['per_text_ms']:.2f} ms")
+    print(f"Throughput: {result['timings']['throughput']:.2f} articles/sec")
+    
+    print("\n" + "="*80)
+    print("📦 Full JSON Result:")
+    print(json.dumps(result, indent=2))
+    
+    print("\n✅ COMPLETE! GPU snapshots active for <1s cold starts on next run.")
