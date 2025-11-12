@@ -1,0 +1,84 @@
+"""
+ULTRA-OPTIMIZED ONNX Inference with GPU Memory Snapshots
+Target: Sub-1s cold start, maximum throughput
+
+CELL 1: Run this first to define the image (reusable across models)
+"""
+
+import modal
+import time
+import os
+from typing import List
+
+# =============================================================================
+# CONFIGURATION
+# =============================================================================
+
+CONFIG = {
+    "MODEL_REPO": "Feargal/cpu-onnx-model",
+    "DEBERTA_ONNX": "model.onnx",
+    "DISTILROBERTA_ONNX": "distil_roberta.onnx",
+    "QUANTUM_ONNX": "quantum_oof_stacking.onnx",
+    "DEBERTA_TOKENIZER": "Feargal/de_berta_model",
+    "DISTILROBERTA_TOKENIZER": "Feargal/distil-roberta",
+    "MAX_LENGTH": 512,
+    "CHUNK_OVERLAP": 50,
+}
+
+MODEL_DIR = "/model_cache"
+hf_secret = modal.Secret.from_name("huggingface-secret")
+
+# =============================================================================
+# IMAGE DEFINITION (Reusable!)
+# =============================================================================
+
+def download_models():
+    """Download models during build - runs once per deployment"""
+    from huggingface_hub import hf_hub_download
+    from transformers import AutoTokenizer
+    
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    token = os.environ["HF_TOKEN"]
+    
+    # Download ONNX models
+    for filename in [CONFIG["DEBERTA_ONNX"], CONFIG["DISTILROBERTA_ONNX"], CONFIG["QUANTUM_ONNX"]]:
+        print(f"Downloading {filename}...")
+        hf_hub_download(
+            repo_id=CONFIG["MODEL_REPO"],
+            filename=filename,
+            token=token,
+            cache_dir=MODEL_DIR,
+            force_filename=filename,
+        )
+    
+    # Download tokenizers
+    for model_name in [CONFIG["DEBERTA_TOKENIZER"], CONFIG["DISTILROBERTA_TOKENIZER"]]:
+        print(f"Downloading tokenizer for {model_name}...")
+        AutoTokenizer.from_pretrained(
+            model_name,
+            use_fast=True,
+            token=token,
+            cache_dir=MODEL_DIR,
+        )
+    print("✅ All models downloaded")
+
+# Minimal, fast-booting image
+disinfo_image = (
+    modal.Image.from_registry(
+        "nvidia/cuda:11.8.0-cudnn8-runtime-ubuntu22.04",
+        add_python="3.12", # <-- FIX 1: Matches your local Python
+    )
+    .pip_install(
+        # --- FIX 2: Stable libraries for Python 3.12
+        "onnxruntime-gpu==1.17.3",
+        "transformers==4.39.3",
+        "tokenizers==0.15.2", # This version avoids the ModelWrapper bug
+        "numpy==1.26.4",
+        "huggingface-hub==0.22.2",
+        "sentencepiece==0.2.0",
+    )
+    .run_function(download_models, secrets=[hf_secret], timeout=600)
+)
+
+print("✅ Image defined. This image can be reused across multiple models!")
+print("Run CELL 2 next to define the inference function.")
