@@ -1,0 +1,206 @@
+"""
+CELL 2: Define the ultra-fast inference function
+Requires CELL 1 to be run first!
+"""
+
+import modal
+import time
+import numpy as np
+import json
+from typing import List
+import concurrent.futures # Needed for parallel loading and inference
+
+# Import from CELL 1
+from __main__ import disinfo_image, CONFIG, MODEL_DIR, hf_secret
+
+app = modal.App("disinfo-ultra-fast")
+
+# =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+def softmax(x):
+    """Fast softmax implementation"""
+    exp_x = np.exp(x - np.max(x, axis=-1, keepdims=True))
+    return exp_x / np.sum(exp_x, axis=-1, keepdims=True)
+
+# Optimized: Function to create ORT session, specifying CPU or GPU
+def create_ort_session(path, use_gpu: bool = True):
+    """Create an ONNX Runtime session for CPU or GPU"""
+    import onnxruntime as ort
+    
+    opts = ort.SessionOptions()
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    opts.intra_op_num_threads = 4
+    opts.inter_op_num_threads = 4
+    opts.enable_mem_pattern = True
+    opts.enable_cpu_mem_arena = True
+    
+    if use_gpu:
+        providers = [
+            ('CUDAExecutionProvider', {
+                'device_id': 0,
+                'arena_extend_strategy': 'kNextPowerOfTwo',
+                'gpu_mem_limit': 4 * 1024 * 1024 * 1024,  # 4GB
+                'cudnn_conv_algo_search': 'EXHAUSTIVE',
+                'do_copy_in_default_stream': True,
+            }),
+            ('CPUExecutionProvider', {}),
+        ]
+    else:
+        providers = [('CPUExecutionProvider', {})]
+    
+    return ort.InSessio(path, opts, providers=providers)
+
+def efficient_chunking(texts: List[str], tokenizer, max_length: int, overlap: int):
+    """Highly efficient chunking for texts of any length."""
+    encoded = tokenizer(
+        texts,
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="np",
+        stride=overlap,
+        return_overflowing_tokens=True,
+        return_attention_mask=True,
+    )
+    return encoded
+
+# Optimized: Vectorized chunk aggregation
+def run_base_model(texts: List[str], session, tokenizer, model_name: str):
+    """Optimized inference with vectorized chunk aggregation"""
+    encoded = efficient_chunking(texts, tokenizer, CONFIG["MAX_LENGTH"], CONFIG["CHUNK_OVERLAP"])
+    
+    inputs = {
+        'input_ids': encoded['input_ids'].astype(np.int64),
+        'attention_mask': encoded['attention_mask'].astype(np.int64)
+    }
+    outputs = session.run(None, inputs)
+    
+    all_chunk_logits = outputs[0]
+    if len(all_chunk_logits.shape) == 3 and len(outputs) > 1:
+        all_chunk_logits = outputs[1]
+    
+    num_texts = len(texts)
+    num_labels = all_chunk_logits.shape[1]
+    
+    if "overflow_to_sample_mapping" in encoded:
+        sample_mapping = encoded['overflow_to_sample_mapping']
+        
+        counts = np.bincount(sample_mapping, minlength=num_texts).astype(np.float32)
+        sums = np.zeros((num_texts, num_labels), dtype=np.float32)
+        np.add.at(sums, sample_mapping, all_chunk_logits.astype(np.float32))
+
+        mean_logits = np.zeros_like(sums)
+        valid_mask = counts > 0
+        mean_logits[valid_mask] = sums[valid_mask] / counts[valid_mask, np.newaxis]
+        
+        final_probs_all = softmax(mean_logits)
+        final_probs = final_probs_all[:, 1]
+        final_probs[~valid_mask] = 0.0
+    else:
+        final_probs = softmax(all_chunk_logits)[:, 1]
+    
+    return final_probs
+
+# =============================================================================
+# GPU-ACCELERATED CLASS WITH MEMORY SNAPSHOTS
+# =============================================================================
+
+@app.cls(
+    image=disinfo_image,
+    gpu="t4",
+    secrets=[hf_secret],
+    enable_memory_snapshot=True,
+    experimental_options={"enable_gpu_snapshot": True},
+    min_containers=0,
+    max_containers=10,
+    scaledown_window=60,
+)
+class DisinfoDetector:
+    
+    @modal.enter(snap=True)
+    def load_models(self):
+        """Optimized: Load all 5 assets in parallel."""
+        import os
+        from transformers import AutoTokenizer
+        
+        start = time.perf_counter()
+        token = os.environ["HF_TOKEN"]
+        
+        def load_tok_task(model_name):
+            return AutoTokenizer.from_pretrained(
+                model_name,
+                use_fast=True,
+                token=token,
+                cache_dir=MODEL_DIR,
+                local_files_only=True,
+            )
+        
+        def load_ort_task(filename, use_gpu: bool):
+            return create_ort_session(os.path.join(MODEL_DIR, filename), use_gpu=use_gpu)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            deberta_tok_future = executor.submit(load_tok_task, CONFIG["DEBERTA_TOKENIZER"])
+            distil_tok_future = executor.submit(load_tok_task, CONFIG["DISTILROBERTA_TOKENIZER"])
+            deberta_ort_future = executor.submit(load_ort_task, CONFIG["DEBERTA_ONNX"], use_gpu=True)
+            distil_ort_future = executor.submit(load_ort_task, CONFIG["DISTILROBERTA_ONNX"], use_gpu=True)
+            quantum_ort_future = executor.submit(load_ort_task, CONFIG["QUANTUM_ONNX"], use_gpu=False)
+
+            self.deberta_tokenizer = deberta_tok_future.result()
+            self.distilroberta_tokenizer = distil_tok_future.result()
+            self.deberta_session = deberta_ort_future.result()
+            self.distilroberta_session = distil_ort_future.result()
+            self.quantum_session = quantum_ort_future.result()
+        
+        elapsed = (time.perf_counter() - start) * 1000
+        print(f"✅ Models loaded in {elapsed:.2f} ms (cached in snapshot)")
+    
+    @modal.method()
+    def detect(self, texts: List[str]) -> dict:
+        """Optimized: Run inference in parallel."""
+        if isinstance(texts, str):
+            texts = [texts]
+        
+        overall_start = time.perf_counter()
+        
+        # Stage 1: Parallel GPU inference
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            deberta_future = executor.submit(
+                run_base_model, texts, self.deberta_session, self.deberta_tokenizer, "DeBERTa"
+            )
+            distilroberta_future = executor.submit(
+                run_base_model, texts, self.distilroberta_session, self.distilroberta_tokenizer, "DistilRoBERTa"
+            )
+            deberta_probs = deberta_future.result()
+            distilroberta_probs = distilroberta_future.result()
+        
+        # Stage 2: CPU stacking
+        stacked = np.column_stack([deberta_probs, distilroberta_probs]).astype(np.float32)
+        quantum_outputs = self.quantum_session.run(None, {'model_predictions': stacked})
+        
+        # Stage 3: Final predictions
+        final_logits = quantum_outputs[0]
+        final_probs = softmax(final_logits)
+        predictions = np.argmax(final_logits, axis=1)
+        
+        labels = ["REAL" if pred == 0 else "FAKE" for pred in predictions]
+        legitimate_probs = final_probs[:, 0]
+        fake_probs = final_probs[:, 1]
+        
+        total_ms = (time.perf_counter() - overall_start) * 1000
+        
+        return {
+            "predictions": predictions.tolist(),
+            "fake_probabilities": fake_probs.tolist(),
+            "real_probabilities": legitimate_probs.tolist(),
+            "labels": labels,
+            "timings": {
+                "total_ms": total_ms,
+                "per_text_ms": total_ms / len(texts),
+                "throughput": len(texts) / (total_ms / 1000)
+            }
+        }
+
+print("✅ Inference function defined!")
+print("Run CELL 3 next to test with your articles.")
